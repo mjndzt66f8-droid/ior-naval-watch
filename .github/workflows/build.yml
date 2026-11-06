@@ -11,11 +11,11 @@ permissions:
 
 jobs:
   apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
-      - name: Unpack the app files from the zip and tidy the repo
+      - name: Unpack the app files from the zip (first run only)
         run: |
           if [ -f IOR-Naval-Watch-repo.zip ]; then
             unzip -o IOR-Naval-Watch-repo.zip -x '.github/*'
@@ -30,18 +30,24 @@ jobs:
         with:
           node-version: 20
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK parts the app needs
+        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
       - name: Assemble the web app with offline maps
         run: |
-          mkdir -p app/www/lib app/assets
+          mkdir -p app/www/lib
           cp index.html data.json app/www/
           cd app
           npm init -y >/dev/null
-          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/assets@3 d3@7.9.0 world-atlas@2.0.2 @highcharts/map-collection@2.3.0
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 d3@7.9.0 world-atlas@2.0.2 @highcharts/map-collection@2.3.0
           cp node_modules/d3/dist/d3.min.js www/lib/
           cp node_modules/world-atlas/countries-50m.json www/lib/
           cp node_modules/@highcharts/map-collection/countries/in/custom/in-all-disputed.topo.json www/lib/india.json
@@ -52,10 +58,14 @@ jobs:
       - name: App icon
         continue-on-error: true
         run: |
-          cp icon.png app/assets/icon-only.png
-          cp icon.png app/assets/icon-foreground.png
-          cd app
-          npx @capacitor/assets generate --android --assetPath assets --iconBackgroundColor '#030A14' --iconBackgroundColorDark '#030A14'
+          R=app/android/app/src/main/res
+          rm -rf $R/mipmap-anydpi-v26
+          for d in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            n=${d%%:*}; s=${d##*:}
+            convert icon.png -resize ${s}x${s} $R/mipmap-$n/ic_launcher.png
+            cp $R/mipmap-$n/ic_launcher.png $R/mipmap-$n/ic_launcher_round.png
+            rm -f $R/mipmap-$n/ic_launcher_foreground.png
+          done
 
       - name: Use the repo's signing key so updates install over the old version
         run: |
@@ -66,8 +76,14 @@ jobs:
         run: |
           cd app/android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../../gradle.log
           cp app/build/outputs/apk/debug/app-debug.apk ../../IOR-Naval-Watch.apk
+
+      - name: Report the build error
+        if: failure()
+        run: |
+          grep -A 12 -E "What went wrong|error:|FAILURE" gradle.log | head -40 | while IFS= read -r l; do echo "::error::$l"; done || true
 
       - uses: actions/upload-artifact@v4
         with:
