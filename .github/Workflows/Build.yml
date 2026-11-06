@@ -1,0 +1,71 @@
+name: Build Android app
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['data.json', 'README.md']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Assemble the web app with offline maps
+        run: |
+          mkdir -p app/www/lib app/assets
+          cp index.html data.json app/www/
+          cd app
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 @capacitor/assets@3 d3@7.9.0 world-atlas@2.0.2 @highcharts/map-collection@2.3.0
+          cp node_modules/d3/dist/d3.min.js www/lib/
+          cp node_modules/world-atlas/countries-50m.json www/lib/
+          cp node_modules/@highcharts/map-collection/countries/in/custom/in-all-disputed.topo.json www/lib/india.json
+          npx cap init "IOR Naval Watch" com.kp.iornavalwatch --web-dir www
+          npx cap add android
+          npx cap sync android
+
+      - name: App icon
+        continue-on-error: true
+        run: |
+          cp icon.png app/assets/icon-only.png
+          cp icon.png app/assets/icon-foreground.png
+          cd app
+          npx @capacitor/assets generate --android --assetPath assets --iconBackgroundColor '#030A14' --iconBackgroundColorDark '#030A14'
+
+      - name: Use the repo's signing key so updates install over the old version
+        run: |
+          mkdir -p ~/.android
+          cp debug.keystore ~/.android/debug.keystore
+
+      - name: Build APK
+        run: |
+          cd app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../../IOR-Naval-Watch.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: IOR-Naval-Watch-apk
+          path: IOR-Naval-Watch.apk
+
+      - name: Publish as a release (download it on your phone from the Releases page)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: IOR Naval Watch v1.0.${{ github.run_number }}
+          files: IOR-Naval-Watch.apk
